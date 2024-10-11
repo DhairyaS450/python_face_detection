@@ -1,0 +1,2 @@
+Learning how machine learning works in python, made a working face detector that uses the pre-trained haarcascade algorithm.
+I am working on further training this pre-trained algorithm and making it more accurate.
