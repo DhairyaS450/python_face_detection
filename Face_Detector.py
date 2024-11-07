@@ -1,47 +1,140 @@
 import cv2
+import argparse
+import time
 from random import randrange
+import sys
+import numpy as np
 
-# Load some pre-trained data on face frontals from opencv (haar cascade algorithm)
-trained_face_data = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-trained_smile_data = cv2.CascadeClassifier('haarcascade_smile.xml')
+def init_cascades():
+    try:
+        face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+        smile_cascade = cv2.CascadeClassifier('haarcascade_smile.xml')
+        if face_cascade.empty() or smile_cascade.empty():
+            raise Exception("Error loading cascade files")
+        return face_cascade, smile_cascade
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
 
-# Choose an image to detect faces in
-#img = cv2.imread('RDJ.png')
-#img = cv2.imread('image2.png')
-# To capture video from webcam
-webcam = cv2.VideoCapture(0)
+# Initialize parameters
+class DetectionParams:
+    def __init__(self):
+        self.face_scale_factor = 1.1
+        self.face_min_neighbors = 5
+        self.smile_scale_factor = 1.5
+        self.smile_min_neighbors = 10
+        self.min_confidence = 0.5
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", type=int, default=0, help="Video source (default: 0 for webcam)")
+    return parser.parse_args()
+
+# Initialize
+args = parse_args()
+params = DetectionParams()
+face_cascade, smile_cascade = init_cascades()
+
+# Initialize video capture
+try:
+    cap = cv2.VideoCapture(args.source)
+    if not cap.isOpened():
+        raise Exception("Cannot open video source")
+except Exception as e:
+    print(f"Error: {str(e)}")
+    sys.exit(1)
+
+# Initialize FPS counter
+prev_frame_time = 0
+new_frame_time = 0
+
+# Initialize face tracking
+prev_faces = []
+
+def draw_instructions(frame):
+    instructions = [
+        "Q: Quit",
+        "W/S: Adjust face detection sensitivity",
+        "E/D: Adjust smile detection sensitivity",
+        "R/F: Adjust minimum neighbors"
+    ]
+    y = 30
+    for text in instructions:
+        cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y += 20
 
 while True:
     
-    # Read the current frame
-    successful_frame_read, frame = webcam.read()
-
-    # Must convert to grayscale
-    grayscaled_img = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Detect faces
-    face_coordinates = trained_face_data.detectMultiScale(grayscaled_img)
-
-    # Detect smiles
-    smile_coordinates = trained_smile_data.detectMultiScale(grayscaled_img, 1.5, 10)
-
-    # Draw rectangles around the faces
-    for (x, y, w, h) in face_coordinates:
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (randrange(256), randrange(256), randrange(256)))
-    
-
-        # Draw rectangles around the smiles
-        for (x2, y2, w2, h2) in smile_coordinates:
-            # Only show if smile is detected within the coordinates of the face
-            if (x2+w2 >= x and x2+w2 <= x+w and y2+h2 >= y and y2+h2 <= y+h):
-                cv2.rectangle(frame, (x2, y2), (x2+w2, y2+h2), (randrange(256), randrange(256), randrange(256)))
-    
-
-    cv2.imshow('Face Detector', frame)
-    key = cv2.waitKey(1)
-
-    # Stop if Q key is pressed
-    if key==81 or key==113:
+    ret, frame = cap.read()
+    if not ret:
+        print("Error: Can't receive frame")
         break
 
-print('Code Completed')
+    # Calculate FPS
+    new_frame_time = time.time()
+    fps = 1/(new_frame_time-prev_frame_time)
+    prev_frame_time = new_frame_time
+    fps = str(int(fps))
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Detect faces with confidence scores
+    faces = face_cascade.detectMultiScale(gray, 
+                                        params.face_scale_factor,
+                                        params.face_min_neighbors,
+                                        minSize=(30, 30),
+                                        flags=cv2.CASCADE_SCALE_IMAGE)
+    
+    # Simple face tracking
+    if len(faces) > 0:
+        prev_faces = faces
+    elif len(prev_faces) > 0:
+        faces = prev_faces
+
+    # Process detected faces
+    for (x, y, w, h) in faces:
+        # Draw face rectangle
+        color = (randrange(256), randrange(256), randrange(256))
+        cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+        
+        # Region of interest for smile detection
+        roi_gray = gray[y:y+h, x:x+w]
+        roi_color = frame[y:y+h, x:x+w]
+        
+        # Detect smiles in face region
+        smiles = smile_cascade.detectMultiScale(roi_gray,
+                                              params.smile_scale_factor,
+                                              params.smile_min_neighbors,
+                                              minSize=(25, 25))
+        
+        for (sx, sy, sw, sh) in smiles:
+            cv2.rectangle(roi_color, (sx, sy), (sx+sw, sy+sh), 
+                         (randrange(256), randrange(256), randrange(256)), 2)
+
+    # Draw FPS and instructions
+    cv2.putText(frame, f'FPS: {fps}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    draw_instructions(frame)
+
+    cv2.imshow('Face Detector', frame)
+    key = cv2.waitKey(1) & 0xFF
+
+    # Key controls
+    if key == ord('q'):
+        break
+    elif key == ord('w'):
+        params.face_scale_factor += 0.1
+    elif key == ord('s'):
+        params.face_scale_factor = max(1.1, params.face_scale_factor - 0.1)
+    elif key == ord('e'):
+        params.smile_scale_factor += 0.1
+    elif key == ord('d'):
+        params.smile_scale_factor = max(1.1, params.smile_scale_factor - 0.1)
+    elif key == ord('r'):
+        params.face_min_neighbors += 1
+    elif key == ord('f'):
+        params.face_min_neighbors = max(3, params.face_min_neighbors - 1)
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
+print('Application closed successfully')
